@@ -51,8 +51,10 @@ SX1280Driver::SX1280Driver(): SX12xxDriverCommon()
 {
     instance = this;
     currOpmode = SX1280_MODE_SLEEP;
-    strongestReceivingRadio = SX12XX_Radio_1;
+    lastSuccessfulPacketRadio = SX12XX_Radio_1;
     fallBackMode = SX1280_MODE_STDBY_RC;
+    prevPacketMode = SX1280_PACKET_TYPE_NONE;
+    prevPacketModeValid = false;
 }
 
 void SX1280Driver::End()
@@ -141,6 +143,139 @@ void SX1280Driver::startCWTest(uint32_t freq, SX12XX_Radio_Number_t radioNumber)
     CommitOutputPower();
     RFAMP.TXenable(radioNumber);
     hal.WriteCommand(SX1280_RADIO_SET_TXCONTINUOUSWAVE, &buffer, 0, radioNumber);
+}
+
+void SX1280Driver::ConfigureRangingCommon(uint32_t rfFrequencyHz,
+                                          uint8_t sf,
+                                          uint8_t bw,
+                                          uint8_t cr,
+                                          uint8_t preambleLength)
+{
+    prevPacketMode = static_cast<SX1280_RadioPacketTypes_t>(packet_mode);
+    prevPacketModeValid = true;
+    packet_mode = SX1280_PACKET_TYPE_RANGING;
+
+    SetMode(SX1280_MODE_STDBY_RC, SX12XX_Radio_All);
+    hal.WriteCommand(SX1280_RADIO_SET_PACKETTYPE, SX1280_PACKET_TYPE_RANGING, SX12XX_Radio_All, 20);
+
+    WORD_ALIGNED_ATTR uint8_t rfparams[3] = {sf, bw, cr};
+    hal.WriteCommand(SX1280_RADIO_SET_MODULATIONPARAMS, rfparams, sizeof(rfparams), SX12XX_Radio_All, 25);
+
+    uint8_t packetParams[7];
+    packetParams[0] = preambleLength;
+    packetParams[1] = SX1280_LORA_PACKET_FIXED_LENGTH;
+    packetParams[2] = 0x00;
+    packetParams[3] = SX1280_LORA_CRC_OFF;
+    packetParams[4] = SX1280_LORA_IQ_NORMAL;
+    packetParams[5] = 0x00;
+    packetParams[6] = 0x00;
+    hal.WriteCommand(SX1280_RADIO_SET_PACKETPARAMS, packetParams, sizeof(packetParams), SX12XX_Radio_All, 20);
+
+    uint32_t regFreq = FrequencyHzToReg(rfFrequencyHz);
+    SetFrequencyReg(regFreq, SX12XX_Radio_All);
+
+    modeSupportsFei = true;
+}
+
+void SX1280Driver::SetRangingAddress(uint32_t address,
+                                     bool isSlave,
+                                     uint8_t addressBits,
+                                     SX12XX_Radio_Number_t radioNumber)
+{
+    uint16_t baseAddr = isSlave ? SX1280_REG_RANGING_SLAVE_ADDRESS_MSB : SX1280_REG_RANGING_MASTER_ADDRESS_MSB;
+    uint8_t addressBuf[4];
+    addressBuf[0] = (uint8_t)(address >> 24);
+    addressBuf[1] = (uint8_t)(address >> 16);
+    addressBuf[2] = (uint8_t)(address >> 8);
+    addressBuf[3] = (uint8_t)(address);
+    hal.WriteRegister(baseAddr, addressBuf, sizeof(addressBuf), radioNumber);
+
+    uint8_t lengthField = RangingAddressFieldFromBits(addressBits);
+    SX12XX_Radio_Number_t readRadio = (radioNumber == SX12XX_Radio_All) ? SX12XX_Radio_1 : radioNumber;
+    uint8_t reg = hal.ReadRegister(SX1280_REG_RANGING_ADDRESS_SIZE, readRadio);
+    reg &= (uint8_t)~SX1280_RANGING_ADDRESS_LENGTH_MASK;
+    reg |= (uint8_t)(lengthField << SX1280_RANGING_ADDRESS_LENGTH_SHIFT);
+    hal.WriteRegister(SX1280_REG_RANGING_ADDRESS_SIZE, reg, radioNumber);
+}
+
+void SX1280Driver::SetRangingCalibration(uint16_t calibration, SX12XX_Radio_Number_t radioNumber)
+{
+    uint8_t buffer[2];
+    buffer[0] = (uint8_t)(calibration >> 8);
+    buffer[1] = (uint8_t)(calibration & 0x00FF);
+    hal.WriteRegister(SX1280_REG_RANGING_CALIBRATION_MSB, buffer, sizeof(buffer), radioNumber);
+}
+
+void SX1280Driver::SetRangingRole(SX1280_RangingRoles_t role, SX12XX_Radio_Number_t radioNumber)
+{
+    hal.WriteCommand(SX1280_RADIO_SET_RANGING_ROLE, static_cast<uint8_t>(role), radioNumber);
+}
+
+void SX1280Driver::StartRangingSlaveContinuous(SX12XX_Radio_Number_t radioNumber)
+{
+    SetMode(SX1280_MODE_STDBY_RC, radioNumber);
+    SetRangingRole(SX1280_RANGING_ROLE_SLAVE, radioNumber);
+    SetMode(SX1280_MODE_RX_CONT, radioNumber);
+}
+
+void SX1280Driver::StartRangingMasterOnce(SX12XX_Radio_Number_t radioNumber)
+{
+    SetMode(SX1280_MODE_STDBY_RC, radioNumber);
+    SetRangingRole(SX1280_RANGING_ROLE_MASTER, radioNumber);
+    RFAMP.TXenable(radioNumber);
+    SetMode(SX1280_MODE_TX, radioNumber);
+}
+
+bool SX1280Driver::GetRangingRaw(uint32_t &rawResult,
+                                 SX1280_RangingResultType_t type,
+                                 SX12XX_Radio_Number_t radioNumber)
+{
+    rawResult = 0;
+    hal.WriteRegister(SX1280_REG_RANGING_RESULT_FREEZE, SX1280_RANGING_RESULT_FREEZE_ENABLE, radioNumber);
+    uint8_t cfg = hal.ReadRegister(SX1280_REG_RANGING_RESULT_CONFIG, radioNumber);
+    cfg &= (uint8_t)~SX1280_RANGING_RESULT_TYPE_MASK;
+    cfg |= static_cast<uint8_t>(type) & SX1280_RANGING_RESULT_TYPE_MASK;
+    hal.WriteRegister(SX1280_REG_RANGING_RESULT_CONFIG, cfg, radioNumber);
+
+    uint8_t result[3] = {0};
+    hal.ReadRegister(SX1280_REG_RANGING_RESULT_MSB, result, sizeof(result), radioNumber);
+    hal.WriteRegister(SX1280_REG_RANGING_RESULT_FREEZE, SX1280_RANGING_RESULT_FREEZE_DISABLE, radioNumber);
+
+    rawResult = ((uint32_t)result[0] << 16) | ((uint32_t)result[1] << 8) | result[2];
+    return true;
+}
+
+float SX1280Driver::GetRangingMeters(SX1280_RangingResultType_t type,
+                                     float bandwidthMHz,
+                                     SX12XX_Radio_Number_t radioNumber)
+{
+    if (bandwidthMHz <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    uint32_t raw = 0;
+    if (!GetRangingRaw(raw, type, radioNumber))
+    {
+        return 0.0f;
+    }
+
+    int32_t signedRaw = SignExtend24Bit(raw);
+    float meters = ((float)signedRaw * 150.0f) / (4096.0f * bandwidthMHz);
+    return meters;
+}
+
+void SX1280Driver::RestorePacketType()
+{
+    if (!prevPacketModeValid)
+    {
+        return;
+    }
+
+    SetMode(SX1280_MODE_STDBY_RC, SX12XX_Radio_All);
+    hal.WriteCommand(SX1280_RADIO_SET_PACKETTYPE, static_cast<uint8_t>(prevPacketMode), SX12XX_Radio_All, 20);
+    packet_mode = prevPacketMode;
+    prevPacketModeValid = false;
 }
 
 void SX1280Driver::Config(uint8_t bw, uint8_t sf, uint8_t cr, uint32_t regfreq,
@@ -645,15 +780,15 @@ void ICACHE_RAM_ATTR SX1280Driver::GetLastPacketStats()
         }
     }
 
-    // by default, set the strongest receiving radio to be the current processing radio (which got a successful packet)
-    instance->strongestReceivingRadio = instance->processingPacketRadio;
+    // by default, set the last successful packet radio to be the current processing radio (which got a successful packet)
+    instance->lastSuccessfulPacketRadio = instance->processingPacketRadio;
 
     // when both radio got the packet, use the better RSSI one
     if(gotRadio[0] && gotRadio[1])
     {
         LastPacketSNRRaw = instance->fuzzy_snr(snr[0], snr[1], instance->FuzzySNRThreshold);
-        // Update the strongest receiving radio to be the one with better signal strength
-        instance->strongestReceivingRadio = (rssi[0]>rssi[1])? radio[0]: radio[1];
+        // Update the last successful packet radio to be the one with better signal strength
+        instance->lastSuccessfulPacketRadio = (rssi[0]>rssi[1])? radio[0]: radio[1];
     }
 
 #if defined(DEBUG_RCVR_SIGNAL_STATS)
@@ -723,4 +858,50 @@ void ICACHE_RAM_ATTR SX1280Driver::IsrCallback(SX12XX_Radio_Number_t radioNumber
         return;
     }
     instance->ClearIrqStatus(SX1280_IRQ_RADIO_ALL, irqClearRadio);
+}
+
+uint8_t SX1280Driver::RangingAddressFieldFromBits(uint8_t addressBits) const
+{
+    switch (addressBits)
+    {
+    case 8:
+        return 0x00;
+    case 16:
+        return 0x01;
+    case 24:
+        return 0x02;
+    default:
+        return 0x03;
+    }
+}
+
+uint32_t SX1280Driver::FrequencyHzToReg(uint32_t freqHz) const
+{
+    if (freqHz == 0)
+    {
+        return 0;
+    }
+
+    if (freqHz < (uint32_t)SX1280_XTAL_FREQ)
+    {
+        return freqHz;
+    }
+
+    double reg = (double)freqHz / (double)FREQ_STEP;
+    if (reg < 0.0)
+    {
+        reg = 0.0;
+    }
+
+    return (uint32_t)(reg + 0.5);
+}
+
+int32_t SX1280Driver::SignExtend24Bit(uint32_t value) const
+{
+    value &= 0x00FFFFFFUL;
+    if (value & 0x00800000UL)
+    {
+        value |= 0xFF000000UL;
+    }
+    return (int32_t)value;
 }

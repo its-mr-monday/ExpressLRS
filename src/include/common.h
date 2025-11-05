@@ -3,6 +3,7 @@
 #ifndef UNIT_TEST
 #include "targets.h"
 #include <device.h>
+#include <cstddef>
 
 #if defined(RADIO_SX127X)
 #include "SX127xDriver.h"
@@ -15,6 +16,7 @@
 #endif
 #else
 #include <cstdint>
+#include <cstddef>
 #endif // UNIT_TEST
 
 #define UID_LEN             6
@@ -313,6 +315,9 @@ extern SX1280Driver Radio;
 expresslrs_mod_settings_s *get_elrs_airRateConfig(uint8_t index);
 expresslrs_rf_pref_params_s *get_elrs_RFperfParams(uint8_t index);
 uint8_t get_elrs_HandsetRate_max(uint8_t rateIndex, uint32_t minInterval);
+uint32_t DeriveRangingIdFromUID(const uint8_t *uidBytes, size_t length);
+uint32_t GetLocalRangingId();
+bool IsRangingExperimentEnabled();
 
 uint8_t TLMratioEnumToValue(expresslrs_tlm_ratio_e const enumval);
 uint8_t TLMBurstMaxForRateRatio(uint16_t const rateHz, uint8_t const ratioDiv);

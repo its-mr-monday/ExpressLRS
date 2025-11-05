@@ -45,6 +45,29 @@ public:
     void GetLastPacketStats();
     void CheckForSecondPacket();
 
+    void ConfigureRangingCommon(uint32_t rfFrequencyHz,
+                                uint8_t sf,
+                                uint8_t bw,
+                                uint8_t cr,
+                                uint8_t preambleLength = 12);
+    void SetRangingAddress(uint32_t address,
+                           bool isSlave,
+                           uint8_t addressBits,
+                           SX12XX_Radio_Number_t radioNumber = SX12XX_Radio_All);
+    void SetRangingCalibration(uint16_t calibration,
+                               SX12XX_Radio_Number_t radioNumber = SX12XX_Radio_All);
+    void SetRangingRole(SX1280_RangingRoles_t role,
+                        SX12XX_Radio_Number_t radioNumber = SX12XX_Radio_All);
+    void StartRangingSlaveContinuous(SX12XX_Radio_Number_t radioNumber = SX12XX_Radio_All);
+    void StartRangingMasterOnce(SX12XX_Radio_Number_t radioNumber = SX12XX_Radio_All);
+    bool GetRangingRaw(uint32_t &rawResult,
+                       SX1280_RangingResultType_t type = SX1280_RANGING_RESULT_RAW,
+                       SX12XX_Radio_Number_t radioNumber = SX12XX_Radio_1);
+    float GetRangingMeters(SX1280_RangingResultType_t type,
+                           float bandwidthMHz,
+                           SX12XX_Radio_Number_t radioNumber = SX12XX_Radio_1);
+    void RestorePacketType();
+
 private:
     // constant used for no power change pending
     // must not be a valid power register value
@@ -56,6 +79,8 @@ private:
     uint8_t pwrCurrent;
     uint8_t pwrPending;
     SX1280_RadioOperatingModes_t fallBackMode;
+    SX1280_RadioPacketTypes_t prevPacketMode;
+    bool prevPacketModeValid;
 
     void SetMode(SX1280_RadioOperatingModes_t OPmode, SX12XX_Radio_Number_t radioNumber);
     void SetFIFOaddr(uint8_t txBaseAddr, uint8_t rxBaseAddr);
@@ -83,4 +108,8 @@ private:
     bool RXnbISR(uint16_t irqStatus, SX12XX_Radio_Number_t radioNumber); // ISR for non-blocking RX routine
     void TXnbISR(); // ISR for non-blocking TX routine
     void CommitOutputPower();
+
+    uint8_t RangingAddressFieldFromBits(uint8_t addressBits) const;
+    uint32_t FrequencyHzToReg(uint32_t freqHz) const;
+    int32_t SignExtend24Bit(uint32_t value) const;
 };

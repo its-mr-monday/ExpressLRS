@@ -211,6 +211,57 @@ uint32_t uidMacSeedGet()
     return macSeed;
 }
 
+static uint32_t crc32_step(uint32_t crc, uint8_t data)
+{
+    crc ^= ((uint32_t)data << 24);
+    for (uint8_t i = 0; i < 8; ++i)
+    {
+        if (crc & 0x80000000UL)
+        {
+            crc = (crc << 1) ^ 0x04C11DB7UL;
+        }
+        else
+        {
+            crc <<= 1;
+        }
+    }
+    return crc;
+}
+
+static uint32_t crc32_ieee(const uint8_t *data, size_t length)
+{
+    if (data == nullptr || length == 0)
+    {
+        return 0;
+    }
+
+    uint32_t crc = 0xFFFFFFFFUL;
+    for (size_t i = 0; i < length; ++i)
+    {
+        crc = crc32_step(crc, data[i]);
+    }
+    return crc ^ 0xFFFFFFFFUL;
+}
+
+uint32_t DeriveRangingIdFromUID(const uint8_t *uidBytes, size_t length)
+{
+    return crc32_ieee(uidBytes, length);
+}
+
+uint32_t GetLocalRangingId()
+{
+    return DeriveRangingIdFromUID(UID, UID_LEN);
+}
+
+bool IsRangingExperimentEnabled()
+{
+#if defined(FEATURE_SX1280_RANGING_EXPERIMENT)
+    return true;
+#else
+    return false;
+#endif
+}
+
 bool ICACHE_RAM_ATTR isDualRadio()
 {
     return GPIO_PIN_NSS_2 != UNDEF_PIN;
