@@ -81,6 +81,7 @@ private:
     SX1280_RadioOperatingModes_t fallBackMode;
     SX1280_RadioPacketTypes_t prevPacketMode;
     bool prevPacketModeValid;
+    SX12XX_Radio_Number_t lastSuccessfulPacketRadio;
 
     void SetMode(SX1280_RadioOperatingModes_t OPmode, SX12XX_Radio_Number_t radioNumber);
     void SetFIFOaddr(uint8_t txBaseAddr, uint8_t rxBaseAddr);
